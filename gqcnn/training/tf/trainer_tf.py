@@ -252,7 +252,7 @@ class GQCNNTrainerTF(object):
                 "training_status"] = GQCNNTrainingStatus.TRAINING
         self._optimize_weights()
 
-    def finetune(self, base_model_dir, finetune_data_dict):
+    def finetune(self, finetune_data_dict):
         """Perform fine-tuning.
 
         Parameters
@@ -260,10 +260,16 @@ class GQCNNTrainerTF(object):
         base_model_dir : str
             Path to the pre-trained base model to use.
         """
-        with self.gqcnn.tf_graph.as_default():
-            self._finetune(base_model_dir, finetune_data_dict)
 
-    def _finetune(self, base_model_dir, finetune_data_dict):
+        # with self.gqcnn.tf_graph.as_default():
+
+        # Optimize weights.
+        if self.progress_dict is not None:
+            self.progress_dict[
+                "training_status"] = GQCNNTrainingStatus.TRAINING
+        self._optimize_weights_finetune(finetune_data_dict=finetune_data_dict)
+
+    def setup_finetune(self):
         """Perform fine-tuning.
 
         Parameters
@@ -273,20 +279,155 @@ class GQCNNTrainerTF(object):
         """
         # Set flag and base model for fine-tuning.
         self.finetuning = True
-        self.base_model_dir = base_model_dir
 
         # Run setup.
-        self._setup()
+        # self._setup()
 
         # Build network.
-        self.gqcnn.set_base_network(base_model_dir)
+        self.gqcnn.set_base_network(self.model_dir)
         self.gqcnn.initialize_network(self.input_im_node, self.input_pose_node)
+    
+    def _optimize_weights_finetune(self, finetune_data_dict=None):
+        """Optimize the network weights."""
+        start_time = time.time()
+        self.num_train = finetune_data_dict['images'].shape[0]
+        self.decay_step = self.decay_step_multiplier * self.num_train
 
-        # Optimize weights.
-        if self.progress_dict is not None:
-            self.progress_dict[
-                "training_status"] = GQCNNTrainingStatus.TRAINING
-        self._optimize_weights(finetune=True, finetune_data_dict=finetune_data_dict)
+        # Setup output.
+        self.train_net_output = self.gqcnn.output
+        if self.training_mode == TrainingMode.CLASSIFICATION:
+            if self.cfg["loss"] == "weighted_cross_entropy":
+                self.gqcnn.add_sigmoid_to_output()
+            else:
+                self.gqcnn.add_softmax_to_output()
+        elif self.training_mode == TrainingMode.REGRESSION:
+            self.gqcnn.add_sigmoid_to_output()
+        else:
+            raise ValueError("Training mode: {} not supported !".format(
+                self.training_mode))
+        train_predictions = self.gqcnn.output
+        drop_rate_in = self.gqcnn.input_drop_rate_node
+        self.weights = self.gqcnn.weights
+
+        # Form loss.
+        with tf.name_scope("loss"):
+            # Part 1: error.
+            loss = self._create_loss()
+            unregularized_loss = loss
+
+            # Part 2: regularization.
+            layer_weights = list(self.weights.values())
+            with tf.name_scope("regularization"):
+                regularizers = tf.nn.l2_loss(layer_weights[0])
+                for w in layer_weights[1:]:
+                    regularizers = regularizers + tf.nn.l2_loss(w)
+            loss += self.train_l2_regularizer * regularizers
+
+        # Setup learning rate.
+        batch = tf.Variable(0)
+        learning_rate = tf.train.exponential_decay(
+            self.base_lr,  # Base learning rate.
+            batch * self.train_batch_size,  # Current index into the dataset.
+            self.decay_step,  # Decay step.
+            self.decay_rate,  # decay rate.
+            staircase=True)
+
+        # Setup variable list.
+        var_list = list(self.weights.values())
+        if finetune:
+            var_list = []
+            for weights_name, weights_val in self.weights.items():
+                layer_name = weight_name_to_layer_name(weights_name)
+                if self.optimize_base_layers or \
+                        layer_name not in self.gqcnn._base_layer_names:
+                    var_list.append(weights_val)
+
+        # Create optimizer.
+        with tf.name_scope("optimizer"):
+            apply_grad_op, global_grad_norm = self._create_optimizer(
+                loss, batch, var_list, learning_rate)
+
+        # Add a handler for SIGINT for graceful exit.
+        def handler(signum, frame):
+            self.logger.info("caught CTRL+C, exiting...")
+            self._cleanup()
+            exit(0)
+
+        signal.signal(signal.SIGINT, handler)
+
+        # Now that everything in our graph is set up, we write the graph to the
+        # summary event so it can be visualized in Tensorboard.
+        # self.summary_writer.add_graph(self.gqcnn.tf_graph)
+
+        # Begin optimization loop.
+        try:
+
+            # Init TF variables.
+            init = tf.global_variables_initializer()
+            self.sess.run(init)
+            self.logger.info("Beginning Optimization...")
+
+            # Loop through training steps.
+            training_range = xrange(
+                int(self.num_epochs * self.num_train) // self.train_batch_size)
+            for step in training_range:
+                # Run optimization.
+                step_start = time.time()
+                # You gonna be here
+                idxs = np.random.randint(self.num_train, size=self.train_batch_size)
+                images = finetune_data_dict['images'][idxs]
+                poses = finetune_data_dict['poses'][idxs]
+                labels = finetune_data_dict['labels'][idxs]
+                _, l, ur_l, lr, predictions, raw_net_output = \
+                    self.sess.run(
+                        [
+                            apply_grad_op, loss, unregularized_loss,
+                            learning_rate, train_predictions,
+                            self.train_net_output
+                        ],
+                        feed_dict={
+                            drop_rate_in: self.drop_rate,
+                            self.input_im_node: images,
+                            self.input_pose_node: poses,
+                            self.train_labels_node: labels
+                        },
+                        options=GeneralConstants.timeout_option)
+                step_stop = time.time()
+                self.logger.info("Step took {} sec.".format(
+                    str(round(step_stop - step_start, 3))))
+
+                if self.training_mode == TrainingMode.REGRESSION:
+                    self.logger.info("Max " + str(np.max(predictions)))
+                    self.logger.info("Min " + str(np.min(predictions)))
+                elif self.cfg["loss"] != "weighted_cross_entropy":
+                    if self._angular_bins == 0:
+                        ex = np.exp(raw_net_output - np.tile(
+                            np.max(raw_net_output, axis=1)[:, np.newaxis],
+                            [1, 2]))
+                        softmax = ex / np.tile(
+                            np.sum(ex, axis=1)[:, np.newaxis], [1, 2])
+
+                        self.logger.info("Max " + str(np.max(softmax[:, 1])))
+                        self.logger.info("Min " + str(np.min(softmax[:, 1])))
+                        self.logger.info("Pred nonzero " +
+                                         str(np.sum(softmax[:, 1] > 0.5)))
+                        self.logger.info("True nonzero " + str(np.sum(labels)))
+
+                else:
+                    sigmoid = 1.0 / (1.0 + np.exp(-raw_net_output))
+                    self.logger.info("Max " + str(np.max(sigmoid)))
+                    self.logger.info("Min " + str(np.min(sigmoid)))
+                    self.logger.info("Pred nonzero " +
+                                     str(np.sum(sigmoid > 0.5)))
+                    self.logger.info("True nonzero " +
+                                     str(np.sum(labels > 0.5)))
+
+                if np.isnan(l) or np.any(np.isnan(poses)):
+                    self.logger.error(
+                        "Encountered NaN in loss or training poses!")
+                    raise Exception
+        except:
+            pass
 
     def _optimize_weights(self, finetune=False, finetune_data_dict=None):
         """Optimize the network weights."""
@@ -1041,9 +1182,6 @@ class GQCNNTrainerTF(object):
 
     def _save_configs(self):
         """Save training configuration."""
-        # Update config for fine-tuning.
-        if self.finetuning:
-            self.cfg["base_model_dir"] = self.base_model_dir
 
         # Save config.
         out_config_filename = os.path.join(self.model_dir,
@@ -1285,7 +1423,7 @@ class GQCNNTrainerTF(object):
 
         # Open a TF session for the GQ-CNN instance and store it also as the
         # optimizer session.
-        self.sess = self.gqcnn.open_session()
+        # self.sess = self.gqcnn.open_session()
 
         # Setup data prefetch queue worker termination event.
         self.term_event = mp.Event()
