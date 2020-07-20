@@ -923,7 +923,7 @@ class GQCnnQualityFunction(GraspQualityFunction):
         self._crop_width = config["crop_width"]
 
         # Init GQ-CNN
-        self._gqcnn = get_gqcnn_model().load(self._gqcnn_model_dir)
+        self._gqcnn = get_gqcnn_model().load(self._gqcnn_model_dir, verbose=False)
 
         # Open Tensorflow session for gqcnn.
         self._gqcnn.open_session()
