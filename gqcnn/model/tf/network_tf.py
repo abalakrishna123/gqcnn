@@ -367,7 +367,7 @@ class GQCNNTF(object):
         """
         with self._graph.as_default():
             # Create new tf checkpoint reader.
-            reader = tf.compat.v1.train.NewCheckpointReader(ckpt_file)
+            reader = tf.train.NewCheckpointReader(ckpt_file)
 
             # Create empty weight object.
             self._weights = GQCNNWeights()
@@ -517,19 +517,19 @@ class GQCNNTF(object):
             # Setup input placeholders.
             if train_im_node is not None:
                 # Training.
-                self._input_im_node = tf.compat.v1.placeholder_with_default(
+                self._input_im_node = tf.placeholder_with_default(
                     train_im_node, (None, self._im_height, self._im_width,
                                     self._num_channels))
-                self._input_pose_node = tf.compat.v1.placeholder_with_default(
+                self._input_pose_node = tf.placeholder_with_default(
                     train_pose_node, (None, self._pose_dim))
             else:
                 # Inference only using GQ-CNN instantiated from `GQCNNTF.load`.
-                self._input_im_node = tf.compat.v1.placeholder(
+                self._input_im_node = tf.placeholder(
                     tf.float32, (self._batch_size, self._im_height,
                                  self._im_width, self._num_channels))
-                self._input_pose_node = tf.compat.v1.placeholder(
+                self._input_pose_node = tf.placeholder(
                     tf.float32, (self._batch_size, self._pose_dim))
-            self._input_drop_rate_node = tf.compat.v1.placeholder_with_default(
+            self._input_drop_rate_node = tf.placeholder_with_default(
                 tf.constant(0.0), ())
 
             # Build network.
@@ -560,12 +560,12 @@ class GQCNNTF(object):
             return self._sess
         self._logger.info("Initializing TF Session...")
         with self._graph.as_default():
-            init = tf.compat.v1.global_variables_initializer()
-            self.tf_config = tf.compat.v1.ConfigProto()
+            init = tf.global_variables_initializer()
+            self.tf_config = tf.ConfigProto()
             # Allow Tensorflow gpu growth so Tensorflow does not lock-up all
             # GPU memory.
             self.tf_config.gpu_options.allow_growth = True
-            self._sess = tf.compat.v1.Session(graph=self._graph, config=self.tf_config)
+            self._sess = tf.Session(graph=self._graph, config=self.tf_config)
             self._sess.run(init)
         return self._sess
 
@@ -1087,10 +1087,10 @@ class GQCNNTF(object):
                     alpha=self._normalization_alpha,
                     beta=self._normalization_beta,
                     bias=self._normalization_bias)
-            pool = tf.nn.max_pool2d(convh,
-                                    ksize=[1, pool_size, pool_size, 1],
-                                    strides=[1, pool_stride_h, pool_stride_w, 1],
-                                    padding="SAME")
+            pool = tf.nn.max_pool(convh,
+                                  ksize=[1, pool_size, pool_size, 1],
+                                  strides=[1, pool_stride_h, pool_stride_w, 1],
+                                  padding="SAME")
 
             # Add output to feature dict.
             self._feature_tensors[name] = pool
@@ -1141,7 +1141,7 @@ class GQCNNTF(object):
             fc = self._leaky_relu(tf.matmul(input_node, fcW) + fcb,
                                   alpha=self._relu_coeff)
 
-        fc = tf.nn.dropout(fc, rate=drop_rate)
+        fc = tf.nn.dropout(fc, 1 - drop_rate)
 
         # Add output to feature dict.
         self._feature_tensors[name] = fc
@@ -1217,7 +1217,7 @@ class GQCNNTF(object):
         fc = self._leaky_relu(tf.matmul(input_fc_node_1, input1W) +
                               tf.matmul(input_fc_node_2, input2W) + fcb,
                               alpha=self._relu_coeff)
-        fc = tf.nn.dropout(fc, rate=drop_rate)
+        fc = tf.nn.dropout(fc, 1 - drop_rate)
 
         # Add output to feature dict.
         self._feature_tensors[name] = fc

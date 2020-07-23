@@ -188,7 +188,7 @@ class GQCNNTrainerTF(object):
         """
         # Instantiate optimizer.
         if self.cfg["optimizer"] == "momentum":
-            optimizer = tf.compat.v1.train.MomentumOptimizer(learning_rate,
+            optimizer = tf.train.MomentumOptimizer(learning_rate,
                                                    self.momentum_rate)
         elif self.cfg["optimizer"] == "adam":
             optimizer = tf.train.AdamOptimizer(learning_rate)
@@ -325,7 +325,7 @@ class GQCNNTrainerTF(object):
 
         # Setup learning rate.
         batch = tf.Variable(0)
-        learning_rate = tf.compat.v1.train.exponential_decay(
+        learning_rate = tf.train.exponential_decay(
             self.base_lr,  # Base learning rate.
             batch * self.train_batch_size,  # Current index into the dataset.
             self.decay_step,  # Decay step.
@@ -357,7 +357,7 @@ class GQCNNTrainerTF(object):
         try:
 
             # Init TF variables.
-            init = tf.compat.v1.global_variables_initializer()
+            init = tf.global_variables_initializer()
             self.sess.run(init)
 
             self.logger.info("Beginning Optimization...")
@@ -1440,15 +1440,15 @@ class GQCNNTrainerTF(object):
                 self.training_mode))
 
         # Set up placeholders.
-        self.train_labels_node = tf.compat.v1.placeholder(train_label_dtype,
+        self.train_labels_node = tf.placeholder(train_label_dtype,
                                                 (self.train_batch_size, ))
-        self.input_im_node = tf.compat.v1.placeholder(
+        self.input_im_node = tf.placeholder(
             tf.float32, (self.train_batch_size, self.im_height, self.im_width,
                          self.im_channels))
-        self.input_pose_node = tf.compat.v1.placeholder(
+        self.input_pose_node = tf.placeholder(
             tf.float32, (self.train_batch_size, self.pose_dim))
         if self._angular_bins > 0:
-            self.train_pred_mask_node = tf.compat.v1.placeholder(
+            self.train_pred_mask_node = tf.placeholder(
                 tf.int32, (self.train_batch_size, self._angular_bins * 2))
 
         # Create data prefetch queue.
@@ -1470,10 +1470,10 @@ class GQCNNTrainerTF(object):
         writer."""
         # Create placeholders for Python values because `tf.summary.scalar`
         # expects a placeholder.
-        self.val_error_placeholder = tf.compat.v1.placeholder(tf.float32, [])
-        self.minibatch_error_placeholder = tf.compat.v1.placeholder(tf.float32, [])
-        self.minibatch_loss_placeholder = tf.compat.v1.placeholder(tf.float32, [])
-        self.learning_rate_placeholder = tf.compat.v1.placeholder(tf.float32, [])
+        self.val_error_placeholder = tf.placeholder(tf.float32, [])
+        self.minibatch_error_placeholder = tf.placeholder(tf.float32, [])
+        self.minibatch_loss_placeholder = tf.placeholder(tf.float32, [])
+        self.learning_rate_placeholder = tf.placeholder(tf.float32, [])
 
         # Tag the `tf.summary.scalar`s so that we can group them together and
         # write different batches of summaries at different intervals.
